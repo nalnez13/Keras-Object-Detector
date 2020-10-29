@@ -1,0 +1,10 @@
+venv
+.idea
+__pycache__
+logs
+*.h5
+*.pb
+*.txt
+*.jpg
+*.cfg
+*.weights
