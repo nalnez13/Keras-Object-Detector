@@ -6,7 +6,12 @@ class Kmeans:
     def __init__(self, cluster_number, annot_path):
         self.cluster_number = cluster_number
         self.annot_path = annot_path
-        self.annots = glob.glob(annot_path + '/*.txt')
+        # self.annots = glob.glob(annot_path + '/*.txt')
+        self.annots = []
+        with open(annot_path, 'r') as f:
+            imgs = f.read().splitlines()
+        for i in imgs:
+            self.annots.append(i.replace('.jpg', '.txt'))
 
     def iou(self, boxes, clusters):  # 1 box -> k clusters
         n = boxes.shape[0]
@@ -89,11 +94,12 @@ class Kmeans:
         print("Accuracy: {:.2f}%".format(
             self.avg_iou(all_boxes, result) * 100))
         ratio = result[:, 1] / result[:, 0]
+        ratio = np.sort(ratio)
         print("WH ratio:", ratio)
 
 
 if __name__ == "__main__":
-    cluster_number = 3
-    annot_path = 'E:/bdd100k/time_parsed/day/train/annotation'
+    cluster_number = 6
+    annot_path = 'E:/FSNet2/Datasets/voc_train.txt'
     kmeans = Kmeans(cluster_number, annot_path)
     kmeans.txt2clusters()

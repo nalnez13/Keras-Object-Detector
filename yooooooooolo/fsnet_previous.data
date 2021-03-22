@@ -1,6 +1,0 @@
-classes= 2
-train  = /home/fsai2/peter/Data14000/train.txt
-valid  = /home/fsai2/peter/Data14000/valid.txt
-names = fsnet_previous.names
-backup = /home/fsai2/peter/backup
-

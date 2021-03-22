@@ -8,3 +8,4 @@ logs
 *.jpg
 *.cfg
 *.weights
+Datasets

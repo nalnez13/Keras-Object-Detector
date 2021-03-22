@@ -139,6 +139,7 @@ class CyclicLR(Callback):
         self.trn_iterations += 1
         self.clr_iterations += 1
         K.set_value(self.model.optimizer.lr, self.clr())
+        logs['lr'] = K.get_value(self.model.optimizer.lr)
 
         self.history.setdefault(
             'lr', []).append(

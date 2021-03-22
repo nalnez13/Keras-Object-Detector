@@ -5,14 +5,17 @@ import keras.backend as K
 
 
 def conv2d_bn(inputs, filters, kernel_size, strides, padding, regularizer, use_se=False, activation='relu',
-              cRelu=False, name=None):
+              cRelu=False, name=None, zero_gamma=False):
     if cRelu:
         filters = int(filters / 2)
     tensor = keras.layers.Conv2D(filters=filters, kernel_size=kernel_size,
                                  strides=strides, padding=padding, use_bias=False,
                                  kernel_regularizer=regularizer,
                                  kernel_initializer=keras.initializers.he_normal())(inputs)
-    tensor = keras.layers.BatchNormalization(momentum=0.9)(tensor)
+    if zero_gamma:
+        tensor = keras.layers.BatchNormalization(gamma_initializer=keras.initializers.Zeros())(tensor)
+    else:
+        tensor = keras.layers.BatchNormalization()(tensor)
 
     if activation == 'h-swish':
         tensor = keras.layers.Activation(h_swish)(tensor)
@@ -33,13 +36,13 @@ def conv2d_bn(inputs, filters, kernel_size, strides, padding, regularizer, use_s
         squeeze = keras.layers.Conv2D(filters=int(c / 4), kernel_size=(1, 1),
                                       use_bias=False, kernel_regularizer=regularizer,
                                       kernel_initializer=keras.initializers.he_normal())(avg_pool)
-        squeeze = keras.layers.BatchNormalization(momentum=0.9)(squeeze)
+        squeeze = keras.layers.BatchNormalization()(squeeze)
         squeeze = keras.layers.Activation('relu')(squeeze)
 
         excitation = keras.layers.Conv2D(filters=c, kernel_size=(1, 1),
                                          use_bias=False, kernel_regularizer=regularizer,
                                          kernel_initializer=keras.initializers.he_normal())(squeeze)
-        excitation = keras.layers.BatchNormalization(momentum=0.9)(excitation)
+        excitation = keras.layers.BatchNormalization()(excitation)
         excitation = keras.layers.Activation('sigmoid')(excitation)
         tensor = keras.layers.Multiply()([excitation, tensor])
     if name is not None:
@@ -48,7 +51,7 @@ def conv2d_bn(inputs, filters, kernel_size, strides, padding, regularizer, use_s
 
 
 def depthwiseconv_bn(inputs, kernel_size, strides, padding, regularizer, activation='relu', depth_multiplier=1,
-                     dilation_rate=1):
+                     dilation_rate=1, zero_gamma=False):
     tensor = keras.layers.DepthwiseConv2D(kernel_size=kernel_size,
                                           strides=strides, padding=padding,
                                           kernel_regularizer=regularizer,
@@ -56,7 +59,10 @@ def depthwiseconv_bn(inputs, kernel_size, strides, padding, regularizer, activat
                                           use_bias=False,
                                           depth_multiplier=depth_multiplier,
                                           dilation_rate=dilation_rate)(inputs)
-    tensor = keras.layers.BatchNormalization(momentum=0.9)(tensor)
+    if zero_gamma:
+        tensor = keras.layers.BatchNormalization(gamma_initializer=keras.initializers.Zeros())(tensor)
+    else:
+        tensor = keras.layers.BatchNormalization()(tensor)
     if activation == 'h-swish':
         tensor = keras.layers.Activation(h_swish)(tensor)
     elif activation == 'relu6':
@@ -77,49 +83,53 @@ def MBBlock_linear(inputs, exp, out, kernel_size, strides, padding, regularizer,
         squeeze = keras.layers.Conv2D(filters=int(exp / 4), kernel_size=(1, 1),
                                       use_bias=False, kernel_regularizer=regularizer,
                                       kernel_initializer=keras.initializers.he_normal())(pool)
-        squeeze = keras.layers.BatchNormalization(momentum=0.9)(squeeze)
+        squeeze = keras.layers.BatchNormalization()(squeeze)
         squeeze = keras.layers.Activation('relu')(squeeze)
 
         excitation = keras.layers.Conv2D(filters=exp, kernel_size=(1, 1),
                                          use_bias=False, kernel_regularizer=regularizer,
                                          kernel_initializer=keras.initializers.he_normal())(squeeze)
-        excitation = keras.layers.BatchNormalization(momentum=0.9)(excitation)
+        excitation = keras.layers.BatchNormalization()(excitation)
         excitation = keras.layers.Activation('sigmoid')(excitation)
         tensor = keras.layers.Multiply()([tensor, excitation])
-    tensor = conv2d_bn(tensor, out, (1, 1), (1, 1), 'same', regularizer, activation='linear')
-    if strides == (1, 1) and c == out:
+
+    if strides == (1, 1) and c == out:  # Residual connection
+        tensor = conv2d_bn(tensor, out, (1, 1), (1, 1), 'same', regularizer, activation='linear', zero_gamma=True)
         if drop_out:
             tensor = keras.layers.Dropout(0.5)(tensor)
         tensor = keras.layers.Add()([inputs, tensor])
+    else:
+        tensor = conv2d_bn(tensor, out, (1, 1), (1, 1), 'same', regularizer, activation='linear', zero_gamma=False)
     return tensor
 
 
 def G_module(inputs, filters, kernel_size, strides, padding, regularizer, trans_size=(3, 3), ratio=2,
-             activation='relu', cRelu=False):
+             activation='relu', cRelu=False, zero_gamma=False):
     if cRelu:
         activation = 'linear'
         filters = filters // 2
     init_channels = math.ceil(filters / ratio)
     x = conv2d_bn(inputs, filters=init_channels, kernel_size=kernel_size, strides=strides, padding=padding,
-                  regularizer=regularizer, activation=activation)
+                  regularizer=regularizer, activation=activation, zero_gamma=zero_gamma)
     if ratio == 1:
         return x
     dw = depthwiseconv_bn(x, kernel_size=trans_size, strides=(1, 1), padding='same', regularizer=regularizer,
-                          activation=activation, depth_multiplier=ratio - 1)
+                          activation=activation, depth_multiplier=ratio - 1, zero_gamma=zero_gamma)
     x = keras.layers.Concatenate()([x, dw])
     if cRelu:
         x = ModifiedCReLU()(x)
     return x
 
 
-def GMBBlock_linear(inputs, exp, out, kernel_size, strides, padding, regularizer, use_se=False,
-                    use_CBAM=False, drop_out=False, activation='relu', ratio=2, cRelu=False):
+def GhostBlock(inputs, exp, out, kernel_size, strides, padding, regularizer, use_se=False,
+               use_eSE=False,
+               activation='relu', ratio=2):
     n, h, w, c = inputs.shape.as_list()
     tensor = G_module(inputs, filters=exp, kernel_size=(1, 1), strides=(1, 1), padding='same', regularizer=regularizer,
-                      ratio=ratio, cRelu=cRelu)
+                      ratio=ratio, activation=activation)
     exp_layer = tensor
     if strides == (2, 2):
-        tensor = depthwiseconv_bn(tensor, kernel_size, strides, padding, regularizer, activation=activation)
+        tensor = depthwiseconv_bn(tensor, kernel_size, strides, padding, regularizer, activation='linear')
 
     if use_se:
         pool = keras.layers.GlobalAveragePooling2D()(tensor)
@@ -127,26 +137,97 @@ def GMBBlock_linear(inputs, exp, out, kernel_size, strides, padding, regularizer
         squeeze = keras.layers.Conv2D(filters=int(exp / 4), kernel_size=(1, 1),
                                       use_bias=False, kernel_regularizer=regularizer,
                                       kernel_initializer=keras.initializers.he_normal())(pool)
-        squeeze = keras.layers.BatchNormalization(momentum=0.9)(squeeze)
+        squeeze = keras.layers.BatchNormalization()(squeeze)
         squeeze = keras.layers.Activation('relu')(squeeze)
 
         excitation = keras.layers.Conv2D(filters=exp, kernel_size=(1, 1),
                                          use_bias=False, kernel_regularizer=regularizer,
                                          kernel_initializer=keras.initializers.he_normal())(squeeze)
-        excitation = keras.layers.BatchNormalization(momentum=0.9)(excitation)
+        excitation = keras.layers.BatchNormalization()(excitation)
         excitation = keras.layers.Activation('sigmoid')(excitation)
         tensor = keras.layers.Multiply()([tensor, excitation])
-
-    if use_CBAM:
-        tensor = CBAM(tensor, regularizer)
 
     tensor = G_module(tensor, filters=out, kernel_size=(1, 1), strides=(1, 1), padding='same', regularizer=regularizer,
                       activation='linear', ratio=ratio)
     if strides == (1, 1):
         if c != out:
             inputs = conv2d_bn(inputs, out, (1, 1), strides, padding, regularizer, activation='linear')
-        if drop_out:
-            tensor = keras.layers.Dropout(drop_out)(tensor)
+
+    if strides == (2, 2):
+        inputs = depthwiseconv_bn(inputs, kernel_size, (2, 2), padding, regularizer, activation='linear')
+        inputs = conv2d_bn(inputs, out, (1, 1), (1, 1), padding, regularizer, activation='linear')
+    tensor = keras.layers.Add()([inputs, tensor])
+    return tensor, exp_layer
+
+
+def GhostBlockRES(inputs, exp, out, kernel_size, strides, padding, regularizer, use_se=False,
+                  activation='relu', ratio=2):
+    n, h, w, c = inputs.shape.as_list()
+    tensor = G_module(inputs, filters=exp, kernel_size=(1, 1), strides=(1, 1), padding='same', regularizer=regularizer,
+                      ratio=ratio, activation=activation)
+    exp_layer = tensor
+    if strides == (2, 2):
+        tensor = depthwiseconv_bn(tensor, kernel_size, strides, padding, regularizer, activation='linear')
+
+    if use_se:
+        pool = keras.layers.GlobalAveragePooling2D()(tensor)
+        pool = keras.layers.Reshape((1, 1, exp))(pool)
+        squeeze = keras.layers.Conv2D(filters=int(exp / 4), kernel_size=(1, 1),
+                                      use_bias=False, kernel_regularizer=regularizer,
+                                      kernel_initializer=keras.initializers.he_normal())(pool)
+        squeeze = keras.layers.BatchNormalization()(squeeze)
+        squeeze = keras.layers.Activation('relu')(squeeze)
+
+        excitation = keras.layers.Conv2D(filters=exp, kernel_size=(1, 1),
+                                         use_bias=False, kernel_regularizer=regularizer,
+                                         kernel_initializer=keras.initializers.he_normal())(squeeze)
+        excitation = keras.layers.BatchNormalization()(excitation)
+        excitation = keras.layers.Activation('sigmoid')(excitation)
+        tensor = keras.layers.Multiply()([tensor, excitation])
+
+    tensor = G_module(tensor, filters=out, kernel_size=(1, 1), strides=(1, 1), padding='same', regularizer=regularizer,
+                      activation='linear', ratio=ratio)
+    if strides == (1, 1):
+        if c != out:
+            inputs = G_module(inputs, out, (1, 1), strides, padding, regularizer, activation='linear', ratio=ratio)
+
+    if strides == (2, 2):
+        inputs = depthwiseconv_bn(inputs, kernel_size, (2, 2), padding, regularizer, activation='linear')
+        inputs = conv2d_bn(inputs, out, (1, 1), (1, 1), padding, regularizer, activation='linear')
+    tensor = keras.layers.Add()([inputs, tensor])
+    return tensor, exp_layer
+
+
+def GhostBlock_HSE(inputs, exp, out, kernel_size, strides, padding, regularizer, use_se=False,
+                   activation='relu', ratio=2):
+    n, h, w, c = inputs.shape.as_list()
+    tensor = G_module(inputs, filters=exp, kernel_size=(1, 1), strides=(1, 1), padding='same', regularizer=regularizer,
+                      ratio=ratio, activation=activation)
+    exp_layer = tensor
+    if strides == (2, 2):
+        tensor = depthwiseconv_bn(tensor, kernel_size, strides, padding, regularizer, activation='linear')
+
+    if use_se:
+        pool = keras.layers.GlobalAveragePooling2D()(tensor)
+        pool = keras.layers.Reshape((1, 1, exp))(pool)
+        squeeze = keras.layers.Conv2D(filters=int(exp / 4), kernel_size=(1, 1),
+                                      use_bias=False, kernel_regularizer=regularizer,
+                                      kernel_initializer=keras.initializers.he_normal())(pool)
+        squeeze = keras.layers.BatchNormalization()(squeeze)
+        squeeze = keras.layers.Activation('relu')(squeeze)
+
+        excitation = keras.layers.Conv2D(filters=exp, kernel_size=(1, 1),
+                                         use_bias=False, kernel_regularizer=regularizer,
+                                         kernel_initializer=keras.initializers.he_normal())(squeeze)
+        excitation = keras.layers.BatchNormalization()(excitation)
+        excitation = keras.layers.Activation('hard_sigmoid')(excitation)
+        tensor = keras.layers.Multiply()([tensor, excitation])
+
+    tensor = G_module(tensor, filters=out, kernel_size=(1, 1), strides=(1, 1), padding='same', regularizer=regularizer,
+                      activation='linear', ratio=ratio)
+    if strides == (1, 1):
+        if c != out:
+            inputs = conv2d_bn(inputs, out, (1, 1), strides, padding, regularizer, activation='linear')
 
     if strides == (2, 2):
         inputs = depthwiseconv_bn(inputs, kernel_size, (2, 2), padding, regularizer, activation='linear')
@@ -231,3 +312,26 @@ class PartialResidual(keras.layers.Layer):
 
     def compute_output_shape(self, input_shape):
         return input_shape[0]
+
+
+def GhostNextBlock(inputs, filters, cardinality, kernel_size, strides, regularizer):
+    n, h, w, c = inputs.shape.as_list()
+    card_filters = filters // cardinality
+    tensors = []
+    for i in range(cardinality):
+        x = G_module(inputs, card_filters, (1, 1), (1, 1), 'same', regularizer, trans_size=kernel_size)
+        if strides == (2, 2):
+            x = depthwiseconv_bn(x, kernel_size, strides, 'same', regularizer, activation='linear')
+        tensors.append(x)
+    x = keras.layers.Concatenate()(tensors)
+    x = G_module(x, filters, (1, 1), (1, 1), 'same', regularizer, trans_size=kernel_size)
+
+    if strides == (1, 1):
+        if c != filters:
+            inputs = conv2d_bn(inputs, filters, (1, 1), strides, 'same', regularizer, activation='linear')
+
+    if strides == (2, 2):
+        inputs = depthwiseconv_bn(inputs, kernel_size, (2, 2), 'same', regularizer, activation='linear')
+        inputs = conv2d_bn(inputs, filters, (1, 1), (1, 1), 'same', regularizer, activation='linear')
+    x = keras.layers.Add()([inputs, x])
+    return x

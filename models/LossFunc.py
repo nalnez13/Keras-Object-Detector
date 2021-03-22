@@ -6,10 +6,11 @@ from Utils.anchor_utils import AnchorUtils
 
 
 class Multibox_Loss:
-    def __init__(self, anchor_config, alpha=0.25, lambda_value=0.5):
+    def __init__(self, anchor_config, alpha=0.25, lambda_value=0.5, scale=1.0):
         self.alpah = alpha
         self.lambda_value = lambda_value
         self.anchor_config = anchor_config
+        self.scale = scale
 
     def compute_loss(self, y_true, y_pred):
         cls_true = y_true[:, :, 4:]
@@ -29,13 +30,10 @@ class Multibox_Loss:
         focal_loss = focal_loss * alpha_factor
         focal_loss = tf.reduce_sum(focal_loss)
 
-        # loc_loss = SmoothL1Loss().compute(loc_true, loc_pred) * gt_mask
         loc_loss = cIoULoss(self.anchor_config).compute(loc_true, loc_pred) * gt_mask
         loc_loss = tf.reduce_sum(loc_loss)
-        # focal_loss = keras.backend.print_tensor(focal_loss, message='focal loss: ')
-        # loc_loss = keras.backend.print_tensor(loc_loss, message='loc loss: ')
 
-        return (focal_loss + loc_loss) / normalizer
+        return (focal_loss + loc_loss) / normalizer * self.scale
 
 
 class SmoothL1Loss:

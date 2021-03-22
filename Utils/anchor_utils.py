@@ -1,10 +1,9 @@
 import numpy as np
-from default_config import cluster_configs
-import cv2
+from Detector.anchor_configs import cluster_configs
 
 
 class AnchorUtils:
-    def __init__(self, input_shape, num_classes, config, iou_thresh=0.5, nms_thres=0.6):
+    def __init__(self, input_shape, num_classes, config, iou_thresh=0.5, nms_thres=0.6, k=9):
         """
 
         :param input_shape: (H, W, C) Tuple
@@ -26,6 +25,7 @@ class AnchorUtils:
         self.prior_height = self.anchors[:, 3] - self.anchors[:, 1]
         self.prior_center_x = 0.5 * (self.anchors[:, 2] + self.anchors[:, 0])
         self.prior_center_y = 0.5 * (self.anchors[:, 3] + self.anchors[:, 1])
+        self.k = k
 
     def __create_anchor_boxes(self):
         anchor_params = []
@@ -252,8 +252,7 @@ class AnchorUtils:
 
     def assign_anchors(self, raw_bboxes):
         y_true = np.zeros((self.num_anchors, 4 + self.num_classes),
-                          np.float32)  # box+classes+background
-        # y_true[:, -1] = 1.
+                          np.float32)  # box+classes
         boxes = []
         for raw_box in raw_bboxes:
             box = np.zeros((4 + self.num_classes))
@@ -277,7 +276,6 @@ class AnchorUtils:
         assign_num = len(best_iou_idx)
         encoded_boxes = encoded_boxes[:, best_iou_mask, :]
         y_true[best_iou_mask, :4] = encoded_boxes[best_iou_idx, np.arange(assign_num), :4]
-        y_true[best_iou_mask, -1] = 0.
         y_true[best_iou_mask, 4:] = boxes[best_iou_idx, 4:]
         return y_true
 
@@ -317,6 +315,64 @@ class AnchorUtils:
         union = box_area + self.anchor_area - intersection
         IoUs = intersection / (union + 1e-7)
         return IoUs
+
+    def _calc_IoU_w_picked_anchors(self, anchors, box):
+        box_area = (box[2] - box[0]) * (box[3] - box[1])
+        x1_max = np.maximum(anchors[:, 0], box[0])
+        y1_max = np.maximum(anchors[:, 1], box[1])
+        x2_min = np.minimum(anchors[:, 2], box[2])
+        y2_min = np.minimum(anchors[:, 3], box[3])
+        inter_w = np.where(x1_max > x2_min, np.zeros_like(x1_max), x2_min - x1_max)
+        inter_h = np.where(y1_max > y2_min, np.zeros_like(y1_max), y2_min - y1_max)
+        intersection = inter_w * inter_h
+
+        anchor_area = (anchors[:, 2] - anchors[:, 0]) * (anchors[:, 3] - anchors[:, 1])
+        union = box_area + anchor_area - intersection
+        IoUs = intersection / (union + 1e-7)
+        return IoUs
+
+    def calc_distance(self, box):
+        anchor_cx = (self.anchors[:, 0] + self.anchors[:, 2]) / 2.
+        anchor_cy = (self.anchors[:, 1] + self.anchors[:, 3]) / 2.
+        box_cx = (box[0] + box[2]) / 2.
+        box_cy = (box[1] + box[3]) / 2.
+        dist = (anchor_cx - box_cx) ** 2 + (anchor_cy - box_cy) ** 2
+        return dist
+
+    def is_inside(self, anchors, box):
+        box_cx = (box[0] + box[2]) / 2.
+        box_cy = (box[1] + box[3]) / 2.
+        x_inside = np.logical_and((anchors[:, 0] < box_cx), (box_cx < anchors[:, 2]))
+        y_inside = np.logical_and((anchors[:, 1] < box_cy), (box_cy < anchors[:, 3]))
+        return np.logical_and(x_inside, y_inside)
+
+    def encode_box_atss(self, box):
+        encoded_box = np.zeros((self.num_anchors, 5))
+        # select nearest k boxes
+        distances = self.calc_distance(box)
+        sorted_idx = np.argsort(distances)
+        picked_anchors = self.anchors[sorted_idx[:self.k]]
+        IoU = self._calc_IoU_w_picked_anchors(picked_anchors, box)
+        iou_mean = np.mean(IoU)
+        iou_std = np.std(IoU)
+        thresh = iou_mean + iou_std
+        IoU_mask = IoU > thresh
+        inside_mask = self.is_inside(picked_anchors, box)
+        mask = np.logical_and(IoU_mask, inside_mask)
+        box_mask = sorted_idx[:self.k][mask]
+        encoded_box[box_mask, -1] = IoU[mask]#[IoU_maks]
+
+        assinged_anchors = self.anchors[box_mask]
+        box_center = (box[:2] + box[2:]) / 2.
+        box_wh = box[2:] - box[:2]
+
+        anchors_center = (assinged_anchors[:, :2] + assinged_anchors[:, 2:]) / 2.
+        anchors_wh = assinged_anchors[:, 2:] - assinged_anchors[:, :2]
+        xy_var = np.array((self.variance[0], self.variance[1]))
+        wh_var = np.array((self.variance[2], self.variance[3]))
+        encoded_box[box_mask, :2] = (box_center - anchors_center) / anchors_wh / xy_var  # center offset
+        encoded_box[box_mask, 2:4] = np.log(box_wh / anchors_wh) / wh_var  # size offset
+        return encoded_box.reshape((-1,))
 
 
 if __name__ == '__main__':
