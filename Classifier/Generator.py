@@ -297,6 +297,84 @@ class ILSVRC_Generator(keras.utils.Sequence):
         return batch_images, batch_cls
 
 
+import re
+
+
+class LPDGenerator(keras.utils.Sequence):
+    def __init__(self, batch_size, input_shape, data_path, augs, num_classes=1000, is_train=True,
+                 label_smoothing=False):
+        """
+
+        :param batch_size:
+        :param input_shape:
+        :param output_stride:
+        :param num_classes:
+        :param data_path:
+        :param augs:
+        :param is_train:
+        """
+        self.batch_size = batch_size
+        self.input_shape = input_shape
+        self.num_classes = num_classes
+        self.is_train = is_train
+        self.label_smoothing = label_smoothing
+        self.eps = 0.1
+        self.augmenter = iaa.Sequential(augs)
+        self.data = glob.glob(data_path + "/**/*.jpg", recursive=True)
+        self.parsing = re.compile("/\d*/")
+
+        self.indexes = None
+        self.on_epoch_end()
+
+    def __len__(self):
+        return int(np.floor(len(self.data) / self.batch_size))
+
+    def __getitem__(self, item):
+        indexes = self.indexes[item * self.batch_size: (item + 1) * self.batch_size]
+        data_list = [self.data[i] for i in indexes]
+        x, y = self.__data_gen(data_list)
+        return x, y
+
+    def on_epoch_end(self):
+        self.indexes = np.arange(len(self.data))
+        if self.is_train:
+            np.random.shuffle(self.indexes)
+
+    def __data_gen(self, data_list):
+        cv2.setNumThreads(0)
+        batch_image = np.zeros(shape=(self.batch_size, self.input_shape[0], self.input_shape[1], self.input_shape[2]),
+                               dtype=np.float32)
+        if self.label_smoothing:
+            batch_label = np.ones(shape=(self.batch_size, self.num_classes), dtype=np.float32) * self.eps / (
+                    self.num_classes - 1)
+        else:
+            batch_label = np.zeros(shape=(self.batch_size, self.num_classes), dtype=np.float32)
+        img_list = []
+        label_list = []
+        for img_path in data_list:
+            img_path = img_path.replace("\\", "/")
+            label = int(self.parsing.findall(img_path)[0].replace("/", ""))
+            img = cv2.imread(img_path)
+            img_list.append(img)
+            label_list.append(label)
+        batch = UnnormalizedBatch(images=img_list, data=label_list)
+        augmented_data = list(self.augmenter.augment_batches(batch, background=False))
+
+        for i in range(len(data_list)):
+            img = augmented_data[0].images_aug[i]
+            label = augmented_data[0].data[i]
+            # cv2.imshow("img", img)
+            # cv2.waitKey()
+            # img = cv2.resize(img, (self.input_shape[1], self.input_shape[0]))
+            img = img.astype(np.float) / 255.
+            batch_image[i] = img
+            if self.label_smoothing:
+                batch_label[i, label] = 1.0 - self.eps
+            else:
+                batch_label[i, label] = 1
+        return batch_image, batch_label
+
+
 if __name__ == '__main__':
     augments = [iaa.SomeOf((0, 3),
                            [
@@ -323,7 +401,7 @@ if __name__ == '__main__':
                             iaa.Sometimes(0.5, iaa.PerspectiveTransform(scale=(0.05, 0.2)))])
                 ]
 
-    bgen = Tiny_imagenet_Generator(32, (64, 64, 3), 'E:/FSNet2/Datasets/tiny-imagenet-200', [])
+    bgen = LPDGenerator(32, (256, 256, 3), 'E:/FSNet2/Datasets/LPD_competition/train', [])
     while True:
         for i in tqdm.tqdm(range(bgen.__len__())):
             bgen.__getitem__(i)

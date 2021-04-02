@@ -3,13 +3,13 @@ import keras
 import datetime
 import os
 import argparse
+from keras_radam import RAdam
 from swa.keras import SWA
 from Classifier import Generator
 from models import Backbones
 from imgaug import augmenters as iaa
 from Utils.print_color import bcolors
 from Utils.cyclical_learning_rate import CyclicLR
-from Utils.warmup_scheduler import WarmUpScheduler
 from Utils.multiGPUCallback import MultiGPUModelCheckpoint
 
 config = tf.ConfigProto()
@@ -19,8 +19,9 @@ keras.backend.set_session(session)
 
 
 def get_single_gpu_model(input_size, num_classes, weight_decay):
-    model, s1, s2, s3, s4, s5, s6 = Backbones.GhostNet_CRELU_CSP(input_shape=(input_size, input_size, 3),
-                                                                 weight_decay=weight_decay, num_classes=num_classes)
+    model, s1, s2, s3, s4, s5, s6 = Backbones.GhostNet_CRELU_CSP_Large(input_shape=(input_size, input_size, 3),
+                                                                       weight_decay=weight_decay,
+                                                                       num_classes=num_classes)
     return model
 
 
@@ -33,7 +34,7 @@ def get_multi_gpu_model(input_size, num_classes, gpus, weight_decay):
     return model, multi_gpu_model
 
 
-def Train(name, epochs=5000, workers=4, gpus=1, input_size=64, batch_size=32, lr=0.01, weights=None,
+def Train(name, epochs=500, workers=4, gpus=1, input_size=64, batch_size=32, lr=0.01, weights=None,
           weight_decay=0.0001):
     if not os.path.isdir('./saved_models'):
         os.makedirs('./saved_models')
@@ -78,13 +79,13 @@ def Train(name, epochs=5000, workers=4, gpus=1, input_size=64, batch_size=32, lr
                            ])
                 ]
 
-    train_batch_gen = Generator.Tiny_imagenet_Generator(batch_size, (64, 64, 3), '../Datasets/tiny-imagenet-200',
-                                                        augments,
-                                                        is_train=True, label_smoothing=True)
+    train_batch_gen = Generator.LPDGenerator(batch_size, (256, 256, 3), '../Datasets/LPD_competition/train',
+                                             augments,
+                                             is_train=True, label_smoothing=True)
 
-    valid_batch_gen = Generator.Tiny_imagenet_Generator(batch_size, (64, 64, 3), '../Datasets/tiny-imagenet-200',
-                                                        [],
-                                                        is_train=False, label_smoothing=True)
+    # valid_batch_gen = Generator.LPDGenerator(batch_size, (256, 256, 3), '../Datasets/tiny-imagenet-200',
+    #                                          [],
+    #                                          is_train=False, label_smoothing=True)
 
     callbacks = [
         CyclicLR(max_lr=lr, base_lr=1e-8, step_size=train_batch_gen.__len__() * 10, mode='triangular2'),
@@ -97,14 +98,14 @@ def Train(name, epochs=5000, workers=4, gpus=1, input_size=64, batch_size=32, lr
         callbacks.append(MultiGPUModelCheckpoint(model=cpu_model, filepath='./saved_models/' + name + '-{epoch:05d}.h5',
                                                  verbose=1, period=5, save_best_only=True))
     else:
-        model = get_single_gpu_model(input_size, 200, weight_decay)
+        model = get_single_gpu_model(input_size, 1000, weight_decay)
         callbacks.append(keras.callbacks.ModelCheckpoint(filepath='./saved_models/' + name + '-{epoch:05d}.h5',
-                                                         verbose=1, period=5, save_best_only=True))
+                                                         verbose=1, period=1, save_best_only=True, monitor='loss'))
 
     if weights:
         model.load_weights(weights)
 
-    model.compile(keras.optimizers.SGD(lr, momentum=0.9, nesterov=True),
+    model.compile(RAdam(lr),
                   loss=keras.losses.categorical_crossentropy,
                   metrics=[keras.metrics.categorical_accuracy, keras.metrics.top_k_categorical_accuracy])
 
@@ -113,8 +114,8 @@ def Train(name, epochs=5000, workers=4, gpus=1, input_size=64, batch_size=32, lr
                         max_queue_size=10,
                         callbacks=callbacks,
                         workers=workers,
-                        epochs=epochs,
-                        validation_data=valid_batch_gen, validation_freq=2)
+                        epochs=epochs)
+    # validation_data=valid_batch_gen, validation_freq=2)
 
     model.save('./saved_models/final.h5')
 
@@ -138,5 +139,5 @@ if __name__ == '__main__':
               batch_size=args.batch_size, lr=args.lr, weights=args.weights, weight_decay=args.weight_decay)
 
     else:
-        Train(name='t-img-GhostNet_CRelu_CSP', input_size=64, lr=0.1, gpus=1, batch_size=256, epochs=300,
+        Train(name='LP-GhostNet_CRelu_CSP_Large', input_size=256, lr=0.01, gpus=1, batch_size=32, epochs=200,
               weight_decay=0.0005)
