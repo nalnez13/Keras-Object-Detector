@@ -335,3 +335,78 @@ def GhostNextBlock(inputs, filters, cardinality, kernel_size, strides, regulariz
         inputs = conv2d_bn(inputs, filters, (1, 1), (1, 1), 'same', regularizer, activation='linear')
     x = keras.layers.Add()([inputs, x])
     return x
+
+
+class DynamicConvolution2D(keras.layers.Layer):
+    def __init__(self, kernel_size, filters, k=4, use_bias=True,
+                 kernel_initializer='glorot_uniform',
+                 kernel_regularizer=None,
+                 kernel_constraint=None,
+                 bias_initializer='zeros',
+                 **kwargs):
+        super(DynamicConvolution2D, self).__init__(**kwargs)
+        self.k = k
+        self.kernel_size = kernel_size
+        self.filters = filters
+        self.use_bias = use_bias
+        self.kernel_initializer = keras.initializers.get(kernel_initializer)
+        self.kernel_regularizer = keras.regularizers.get(kernel_regularizer)
+        self.kernel_constraint = keras.constraints.get(kernel_constraint)
+        self.bias_initializer = keras.initializers.get(bias_initializer)
+
+    def build(self, input_shape):
+        kernel_shape = (self.k,) + self.kernel_size + (input_shape[-1], self.filters)
+        self.kernels = self.add_weight(
+            shape=kernel_shape,
+            initializer=self.kernel_initializer,
+            name='kernels',
+            regularizer=self.kernel_regularizer,
+            constraint=self.kernel_constraint
+        )
+        if self.use_bias:
+            bias_shape = (self.k, self.filters)
+            self.biases = self.add_weight(
+                shape=bias_shape,
+                initializer=self.bias_initializer,
+
+            )
+        else:
+            self.biases = None
+
+        self.attention_kernel_1 = self.add_weight(shape=(input_shape[-1], input_shape[-1] // 4),
+                                                  initializer=self.kernel_initializer,
+                                                  name='attention_kernel_1',
+                                                  regularizer=self.kernel_regularizer,
+                                                  constraint=self.kernel_constraint)
+        self.attention_bias_1 = self.add_weight(shape=(input_shape[-1] // 4,),
+                                                initializer=self.bias_initializer,
+                                                name='attention_bias_1',
+                                                regularizer=self.bias_regularizer,
+                                                constraint=self.bias_constraint)
+        self.attention_kernel_2 = self.add_weight(shape=(input_shape[-1] // 4, input_shape[-1]),
+                                                  initializer=self.kernel_initializer,
+                                                  name='attention_kernel_2',
+                                                  regularizer=self.kernel_regularizer,
+                                                  constraint=self.kernel_constraint)
+        self.attention_bias_2 = self.add_weight(shape=(input_shape[-1],),
+                                                initializer=self.bias_initializer,
+                                                name='attention_bias_2',
+                                                regularizer=self.bias_regularizer,
+                                                constraint=self.bias_constraint)
+
+    def call(self, inputs, **kwargs):
+        pooling = K.mean(inputs, axis=[1, 2])
+        b, c = K.shape(pooling)
+
+        attention1 = K.dot(pooling, self.attention_kernel_1)
+        attention1 = K.bias_add(attention1, self.attention_bias_1)
+        attention1 = K.relu(attention1)
+        attention2 = K.dot(attention1, self.attention_kernel_2)
+        attention2 = K.bias_add(attention2, self.attention_bias_2)
+        attention = K.softmax(attention2)
+        attention = K.reshape(attention, (b, 1, 1, c))
+
+        conv_kernel = K.dot()
+
+    def compute_output_shape(self, input_shape):
+        pass

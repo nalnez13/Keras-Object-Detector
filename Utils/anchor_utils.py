@@ -1,5 +1,8 @@
 import numpy as np
-from Detector.anchor_configs import cluster_configs
+
+"""
+DEPRECATED
+"""
 
 
 class AnchorUtils:
@@ -360,7 +363,7 @@ class AnchorUtils:
         inside_mask = self.is_inside(picked_anchors, box)
         mask = np.logical_and(IoU_mask, inside_mask)
         box_mask = sorted_idx[:self.k][mask]
-        encoded_box[box_mask, -1] = IoU[mask]#[IoU_maks]
+        encoded_box[box_mask, -1] = IoU[mask]  # [IoU_maks]
 
         assinged_anchors = self.anchors[box_mask]
         box_center = (box[:2] + box[2:]) / 2.

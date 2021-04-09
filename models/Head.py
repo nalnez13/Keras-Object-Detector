@@ -81,6 +81,7 @@ def SharedHeadNet(backbone, s3, s4, s5, s6, num_classes, num_anchors_per_layer, 
         x2 = conv2d_bn(inputs, 256, (1, 1), (1, 1), 'same', l2_reg)
         return keras.layers.Add()([x1, x2])
 
+    anchors = keras.layers.Input((None, 4), name='anchors')
     cls_head = cls_net(num_anchors_per_layer, num_classes, weight_decay=weight_decay)
     reg_head = reg_net(num_anchors_per_layer, weight_decay=weight_decay)
 
@@ -133,7 +134,7 @@ def SharedHeadNet(backbone, s3, s4, s5, s6, num_classes, num_anchors_per_layer, 
     P7_loc = keras.layers.Reshape((-1, 4))(P7_loc)
     loc_pred = keras.layers.Concatenate(axis=1, name='loc_pred')([P3_loc, P4_loc, P5_loc, P6_loc, P7_loc])
     prediction = keras.layers.Concatenate(name='prediction')([loc_pred, cls_pred])
-    return keras.models.Model(inputs=[backbone.input], outputs=[prediction])
+    return keras.models.Model(inputs=[backbone.input, anchors], outputs=[prediction])
 
 
 def cls_net(num_anchors_per_layer, num_classes, pyramid_depth=256, weight_decay=0.0001):
@@ -186,7 +187,7 @@ if __name__ == '__main__':
         return flops.total_float_ops  # Prints the "flops" of the model.
 
 
-    model, s1, s2, s3, s4, s5, s6 = Backbones.GhostNet_CRELU(input_shape=(320, 320, 3))
-    detector = SubNet(model, s3, s4, s5, s6, 3, 6)
+    model, s1, s2, s3, s4, s5, s6 = Backbones.GhostNet_CRELU_CSP(input_shape=(320, 320, 3))
+    detector = SharedHeadNet(model, s3, s4, s5, s6, 3, 6)
     detector.summary()
     print(get_flops(model))

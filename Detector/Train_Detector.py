@@ -6,7 +6,7 @@ import argparse
 from swa.keras import SWA
 from keras_radam import RAdam
 from Detector import Generator
-from Detector import anchor_configs
+from Detector import AnchorPresets, AnchorUtil
 from models import Head, Backbones, LossFunc
 from imgaug import augmenters as iaa
 import imgaug
@@ -21,9 +21,9 @@ session = tf.Session(config=config)
 keras.backend.set_session(session)
 
 
-def get_single_gpu_model(input_size, num_classes, anchors_per_layer, weight_decay):
-    backbone, s1, s2, s3, s4, s5, s6 = Backbones.GhostNet_CRELU_CSP(input_shape=(input_size, input_size, 3),
-                                                                weight_decay=weight_decay)
+def get_single_gpu_model(num_classes, anchors_per_layer, weight_decay):
+    backbone, s1, s2, s3, s4, s5, s6 = Backbones.GhostNet_CRELU_CSP(input_shape=(None, None, 3),
+                                                                    weight_decay=weight_decay)
     model = Head.SharedHeadNet(backbone, s3, s4, s5, s6, num_classes, anchors_per_layer, weight_decay=weight_decay)
     return backbone, model
 
@@ -38,8 +38,11 @@ def get_multi_gpu_model(input_size, num_classes, anchors_per_layer, gpus, weight
     return backbone, model, multi_gpu_model
 
 
-def Train(num_classes, train, val, name, anchor_config, epochs=5000, workers=4, gpus=1,
-          load_backbone=True, input_size=256, freeze_backbone=False, batch_size=32, lr=0.01, weights=None,
+def Train(num_classes, train, val, name,
+          epochs=5000, workers=4, gpus=1,
+          batch_size=32, base_input_size=256, lr=0.01,
+          weights=None, freeze_backbone=False, load_backbone=False,
+          multi_scaling=False, multi_scaling_freq=30,
           weight_decay=0.0001):
     if not os.path.isdir('./saved_models'):
         os.makedirs('./saved_models')
@@ -53,7 +56,7 @@ def Train(num_classes, train, val, name, anchor_config, epochs=5000, workers=4, 
     print(bcolors.GREEN)
     print('=======================================')
     print('[i] name :', name)
-    print('[i] input size :', input_size)
+    print('[i] base input size :', base_input_size)
     print('[i] classes :', num_classes)
     print('[i] epochs:', epochs)
     print('[i] batch size:', batch_size)
@@ -65,7 +68,13 @@ def Train(num_classes, train, val, name, anchor_config, epochs=5000, workers=4, 
     print('[i] load only backbone: ', load_backbone and weights is not None)
     print('[i] freeze backbone:', freeze_backbone)
     print('[i] weight_decay:', weight_decay)
+    print('[i] multi scaling:', multi_scaling)
     print('=======================================' + bcolors.ENDC)
+
+    anchor_config = AnchorUtil.AnchorComputer(
+        (base_input_size, base_input_size, 3),
+        num_classes,
+        AnchorPresets.default_config)
 
     augments = [iaa.SomeOf((0, 3),
                            [
@@ -85,30 +94,33 @@ def Train(num_classes, train, val, name, anchor_config, epochs=5000, workers=4, 
                                           iaa.CropAndPad(percent=(-0.2, 0.2), keep_size=True, pad_mode=imgaug.ALL)),
                             iaa.Sometimes(0.5, iaa.Affine(scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
                                                           mode=imgaug.ALL)),
-                            iaa.Sometimes(0.5, iaa.PerspectiveTransform(scale=(0.05, 0.2), mode=imgaug.ALL))])
+                            iaa.Sometimes(0.5, iaa.PerspectiveTransform(scale=(0.05, 0.05), mode=imgaug.ALL))])
                 ]
 
-    train_batch_gen = Generator.AnchorGenerator(batch_size=batch_size, input_shape=(input_size, input_size, 3),
-                                                num_classes=num_classes, anchor_config=anchor_config, data_path=train,
-                                                augs=augments, is_train=True)
+    train_batch_gen = Generator.AnchorGenerator(batch_size=batch_size,
+                                                input_shape=(base_input_size, base_input_size, 3),
+                                                num_classes=num_classes, anchor_util=anchor_config, data_path=train,
+                                                augs=augments, is_train=True,
+                                                multi_scaling=multi_scaling,
+                                                scaling_freq=multi_scaling_freq)
 
-    valid_batch_gen = Generator.AnchorGenerator(batch_size=batch_size, input_shape=(input_size, input_size, 3),
-                                                num_classes=num_classes, anchor_config=anchor_config, data_path=val,
+    valid_batch_gen = Generator.AnchorGenerator(batch_size=batch_size,
+                                                input_shape=(base_input_size, base_input_size, 3),
+                                                num_classes=num_classes, anchor_util=anchor_config, data_path=val,
                                                 augs=[], is_train=False)
 
     callbacks = [
-        CyclicLR(max_lr=lr, base_lr=1e-7, step_size=train_batch_gen.__len__() * 15, mode='triangular2'),
+        CyclicLR(max_lr=lr, base_lr=1e-7, step_size=train_batch_gen.__len__() * 10, mode='triangular2'),
         SWA(start_epoch=50, batch_size=batch_size, lr_schedule='manual', verbose=1),
         keras.callbacks.TensorBoard(log_dir),
     ]
 
     if gpus > 1:
-        backbone, cpu_model, model = get_multi_gpu_model(input_size, num_classes,
-                                                         anchor_config['num_anchors_per_layer'], gpus, weight_decay)
+        backbone, cpu_model, model = get_multi_gpu_model(num_classes, 6, gpus, weight_decay)
         callbacks.append(MultiGPUModelCheckpoint(model=cpu_model, filepath='./saved_models/' + name + '-{epoch:05d}.h5',
                                                  verbose=1, period=5, save_best_only=True))
     else:
-        backbone, model = get_single_gpu_model(input_size, num_classes, anchor_config['num_anchors_per_layer'],
+        backbone, model = get_single_gpu_model(num_classes, 6,
                                                weight_decay)
         callbacks.append(keras.callbacks.ModelCheckpoint(filepath='./saved_models/' + name + '-{epoch:05d}.h5',
                                                          verbose=1, period=5, save_best_only=True))
@@ -127,11 +139,10 @@ def Train(num_classes, train, val, name, anchor_config, epochs=5000, workers=4, 
             backbone.trainable = False
 
     model.compile(RAdam(lr),
-                  # keras.optimizers.SGD(lr, momentum=0.9, nesterov=True),
-                  loss={'prediction': LossFunc.Multibox_Loss(anchor_config).compute_loss})
+                  loss={'prediction': LossFunc.Multibox_Loss(model.inputs[1]).compute_loss})
 
     model.fit_generator(train_batch_gen,
-                        use_multiprocessing=True,
+                        use_multiprocessing=False,
                         max_queue_size=10,
                         callbacks=callbacks,
                         workers=workers,
@@ -170,5 +181,6 @@ if __name__ == '__main__':
 
     else:
         Train(num_classes=20, train='../Datasets/voc_train.txt', val='../Datasets/voc_valid.txt',
-              anchor_config=anchor_configs.voc_configs,
-              name='voc-GhostNet_CRELU_CSP_SharedHead', input_size=320, lr=0.001, gpus=1, batch_size=32, epochs=300)
+              workers=2,
+              name='voc-GhostNet_CRELU_CSP_SharedHead', base_input_size=256, lr=0.001, gpus=1, batch_size=32,
+              epochs=300, multi_scaling=True, multi_scaling_freq=2)

@@ -1,21 +1,25 @@
 import glob
 import os
+import random
 import cv2
 import imgaug
 import numpy as np
 from imgaug import augmenters as iaa
 from imgaug.augmentables.batches import UnnormalizedBatch
 import keras
-from Utils.anchor_utils import AnchorUtils
+from AnchorUtil import AnchorComputer, LayerConfigs
 from Utils.print_color import bcolors
 
 
 class AnchorGenerator(keras.utils.Sequence):
-    def __init__(self, batch_size, input_shape, num_classes, anchor_config, data_path, augs, is_train=True):
+    def __init__(self, batch_size, input_shape, num_classes, anchor_util, data_path, augs, is_train=True,
+                 multi_scaling=False, scaling_freq=10, scaling_level=6):
         self.batch_size = batch_size
         self.input_shape = input_shape
         self.num_classes = num_classes
-        self.anchor_utils = AnchorUtils(self.input_shape, self.num_classes, anchor_config)
+        self.anchor_util = anchor_util
+
+        print(bcolors.GREEN)
         if data_path[-4:] == '.txt':
             with open(data_path, 'r') as f:
                 self.data = f.read().splitlines()
@@ -23,24 +27,55 @@ class AnchorGenerator(keras.utils.Sequence):
         else:
             self.data = glob.glob(data_path + '/*.jpg')
             print("[i] Found {} Data in path".format(len(self.data)) + bcolors.ENDC)
+
+        self.multi_scaling = multi_scaling
+        if self.multi_scaling:
+            assert scaling_level % 2 == 0, 'Multi scaling level must be even step.'
+            print(bcolors.GREEN + "[i] Generator is running multi scaling mode".format(len(self.data)) +
+                  bcolors.ENDC)
+            self.scale_idx = 0
+            self.input_multi_scales = self.set_multi_scales(scaling_level)
+            self.scaling_freq = scaling_freq
+
         self.augmenter = iaa.Sequential(augs)
         self.is_train = is_train
         self.indexes = None
         self.on_epoch_end()
 
-    def __getitem__(self, item):
-        indexes = self.indexes[item * self.batch_size: (item + 1) * self.batch_size]
+    def set_multi_scales(self, scaling_level):
+        input_scales = [(self.input_shape[0], self.input_shape[1]), ]
+        for s in range(1, scaling_level // 2):
+            input_scales.append((int(self.input_shape[0] + 16 * s),
+                                 int(self.input_shape[1] + 16 * s),
+                                 self.input_shape[2]))
+            input_scales.append((int(self.input_shape[0] - 16 * s),
+                                 int(self.input_shape[1] - 16 * s),
+                                 self.input_shape[2]))
+        return input_scales
+
+    def __getitem__(self, iters):
+        if self.multi_scaling:
+            self.select_random_scale(iters)
+
+        indexes = self.indexes[iters * self.batch_size: (iters + 1) * self.batch_size]
         data_list = [self.data[i] for i in indexes]
-        x, y = self.__data_gen(data_list)
+        x, y = self.__generate_data(data_list)
         return x, y
 
-    def __data_gen(self, data_list):
+    def select_random_scale(self, iters):
+        if (iters + 1) % self.scaling_freq == 0:
+            scale_idx = self.scale_idx
+            while self.scale_idx == scale_idx:
+                scale_idx = random.randint(0, len(self.input_multi_scales))
+            self.input_shape = self.input_multi_scales[scale_idx]
+            self.anchor_util.calculate_priors(self.input_shape)
+
+    def __generate_data(self, data_list):
         cv2.setNumThreads(0)
         batch_images = np.zeros(shape=(self.batch_size, self.input_shape[0], self.input_shape[1], 3),
                                 dtype=np.float32)
-        batch_y = np.zeros(
-            shape=(self.batch_size, self.anchor_utils.num_anchors, 4 + self.num_classes),
-            dtype=np.float32)
+        batch_y = np.zeros(shape=(self.batch_size, self.anchor_util.num_anchors, self.num_classes + 4),
+                           dtype=np.float32)
 
         imgs = []
         bounding_boxes = []
@@ -62,19 +97,19 @@ class AnchorGenerator(keras.utils.Sequence):
             batch_images[i] = img
             bboxes_aug = augmented_data[0].bounding_boxes_aug[i].remove_out_of_image_fraction(0.9).clip_out_of_image_()
             bboxes = bboxes_aug.bounding_boxes
-            y = self.anchor_utils.assign_anchors(bboxes)
-            batch_y[i] = y
+            batch_y[i] = self.anchor_util.assign_anchors(bboxes, self.input_shape)
             # test
-            # r = self.anchor_utils.postprocess_detections(y)
+            # r = self.anchor_util.postprocess(batch_y[i])
             # for d in r:
             #     x1, y1, x2, y2, cls, conf = d
-            #     print(d)
             #     img = cv2.rectangle(img, (int(x1 * self.input_shape[1]), int(y1 * self.input_shape[1])),
             #                         (int(x2 * self.input_shape[0]), int(y2 * self.input_shape[0])), (255, 255, 255))
             # cv2.imshow('test', img)
             # cv2.waitKey(0)
 
-        return batch_images, batch_y
+        input_anchors = np.expand_dims(self.anchor_util.anchors, axis=0)
+        input_anchors = np.repeat(input_anchors, self.batch_size, axis=0)
+        return [batch_images, input_anchors], batch_y
 
     def __read_gt_boxes(self, annotation_file):
         boxes_per_img = []
@@ -103,8 +138,6 @@ class AnchorGenerator(keras.utils.Sequence):
 
 
 if __name__ == '__main__':
-    from Detector.anchor_configs import voc_configs
-
     augments = [iaa.SomeOf((0, 3),
                            [
                                iaa.Identity(),
@@ -123,11 +156,13 @@ if __name__ == '__main__':
                                           iaa.CropAndPad(percent=(-0.2, 0.2), keep_size=True, pad_mode=imgaug.ALL)),
                             iaa.Sometimes(0.5, iaa.Affine(scale={"x": (0.9, 1.1), "y": (0.9, 1.1)},
                                                           mode=imgaug.ALL)),
-                            iaa.Sometimes(0.5, iaa.PerspectiveTransform(scale=(0.05, 0.2), mode=imgaug.ALL))])
+                            iaa.Sometimes(0.5, iaa.PerspectiveTransform(scale=(0.05, 0.05), mode=imgaug.ALL))])
                 ]
 
-    gen = AnchorGenerator(batch_size=1, input_shape=(256, 256), num_classes=20, anchor_config=voc_configs,
+    anchor = AnchorComputer((320, 320, 3), 20, c)
+    gen = AnchorGenerator(batch_size=16, input_shape=(256, 256), num_classes=20, anchor_util=anchor,
                           data_path='E:/FSNet2/Datasets/voc_train.txt', augs=augments)
 
     for i in range(gen.__len__()):
+        print(i)
         gen.__getitem__(i)

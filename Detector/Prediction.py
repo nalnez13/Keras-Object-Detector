@@ -4,7 +4,6 @@ import cv2
 import numpy as np
 from models import Backbones, Head
 from Utils.anchor_utils import AnchorUtils
-from Detector.anchor_configs import cluster_configs
 
 keras.backend.set_learning_phase(0)
 

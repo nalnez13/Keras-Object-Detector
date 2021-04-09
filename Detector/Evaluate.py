@@ -4,7 +4,6 @@ import numpy as np
 import tqdm
 from models import Backbones, Head
 from Utils.anchor_utils import AnchorUtils
-from Detector.anchor_configs import voc_configs
 from map.detection_map import DetectionMAP
 import matplotlib.pyplot as plt
 
