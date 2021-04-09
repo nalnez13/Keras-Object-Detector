@@ -142,7 +142,7 @@ def Train(num_classes, train, val, name,
                   loss={'prediction': LossFunc.Multibox_Loss(model.inputs[1]).compute_loss})
 
     model.fit_generator(train_batch_gen,
-                        use_multiprocessing=False,
+                        use_multiprocessing=True,
                         max_queue_size=10,
                         callbacks=callbacks,
                         workers=workers,
@@ -182,5 +182,5 @@ if __name__ == '__main__':
     else:
         Train(num_classes=20, train='../Datasets/voc_train.txt', val='../Datasets/voc_valid.txt',
               workers=2,
-              name='voc-GhostNet_CRELU_CSP_SharedHead', base_input_size=256, lr=0.001, gpus=1, batch_size=32,
+              name='voc-GhostNet_CRELU_CSP_SharedHead', base_input_size=224, lr=0.001, gpus=1, batch_size=32,
               epochs=300, multi_scaling=True, multi_scaling_freq=2)

@@ -44,12 +44,12 @@ class AnchorGenerator(keras.utils.Sequence):
 
     def set_multi_scales(self, scaling_level):
         input_scales = [(self.input_shape[0], self.input_shape[1]), ]
-        for s in range(1, scaling_level // 2):
-            input_scales.append((int(self.input_shape[0] + 16 * s),
-                                 int(self.input_shape[1] + 16 * s),
+        for s in range(1, scaling_level // 2 + 1):
+            input_scales.append((int(self.input_shape[0] + 32 * s),
+                                 int(self.input_shape[1] + 32 * s),
                                  self.input_shape[2]))
-            input_scales.append((int(self.input_shape[0] - 16 * s),
-                                 int(self.input_shape[1] - 16 * s),
+            input_scales.append((int(self.input_shape[0] - 32 * s),
+                                 int(self.input_shape[1] - 32 * s),
                                  self.input_shape[2]))
         return input_scales
 
