@@ -66,7 +66,7 @@ class AnchorGenerator(keras.utils.Sequence):
         if (iters + 1) % self.scaling_freq == 0:
             scale_idx = self.scale_idx
             while self.scale_idx == scale_idx:
-                scale_idx = random.randint(0, len(self.input_multi_scales))
+                scale_idx = random.randint(0, len(self.input_multi_scales) - 1)
             self.input_shape = self.input_multi_scales[scale_idx]
             self.anchor_util.calculate_priors(self.input_shape)
 
