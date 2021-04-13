@@ -13,7 +13,7 @@ from Utils.print_color import bcolors
 
 class AnchorGenerator(keras.utils.Sequence):
     def __init__(self, batch_size, input_shape, num_classes, anchor_util, data_path, augs, is_train=True,
-                 multi_scaling=False, scaling_freq=10, scaling_level=6):
+                 multi_scaling=False, scaling_freq=10, scaling_level=4):
         self.batch_size = batch_size
         self.input_shape = input_shape
         self.num_classes = num_classes
