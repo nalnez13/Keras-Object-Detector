@@ -107,9 +107,9 @@ class AnchorGenerator(keras.utils.Sequence):
             # cv2.imshow('test', img)
             # cv2.waitKey(0)
 
-        input_anchors = np.expand_dims(self.anchor_util.anchors, axis=0)
-        input_anchors = np.repeat(input_anchors, self.batch_size, axis=0)
-        return [batch_images, input_anchors], batch_y
+        # input_anchors = np.expand_dims(self.anchor_util.anchors, axis=0)
+        # input_anchors = np.repeat(input_anchors, self.batch_size, axis=0)
+        return batch_images, batch_y
 
     def __read_gt_boxes(self, annotation_file):
         boxes_per_img = []

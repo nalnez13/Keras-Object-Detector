@@ -2,9 +2,8 @@ import tensorflow as tf
 import math
 
 
-class Multibox_Loss:
-    def __init__(self, anchors, alpha=0.25, scale=1.0):
-        self.anchors = anchors
+class MultiBoxLoss:
+    def __init__(self, alpha=0.25, scale=1.0):
         self.alpah = alpha
         self.scale = scale
 
@@ -25,7 +24,8 @@ class Multibox_Loss:
         focal_loss = focal_loss * alpha_factor
         focal_loss = tf.reduce_sum(focal_loss)
 
-        loc_loss = cIoULoss().compute(loc_true, loc_pred, self.anchors) * gt_mask
+        # loc_loss = cIoULoss().compute(loc_true, loc_pred) * gt_mask
+        loc_loss = SmoothL1Loss().compute(loc_true, loc_pred) * tf.expand_dims(gt_mask, axis=-1)
         loc_loss = tf.reduce_sum(loc_loss)
 
         return (focal_loss + loc_loss) / normalizer * self.scale
@@ -144,4 +144,4 @@ class SmoothL1Loss:
         abs_loss = tf.abs(y_true - y_pred)
         square_loss = 0.5 * (y_true - y_pred) ** 2
         l1_loss = tf.where(tf.less(abs_loss, 1.0), square_loss, abs_loss - 0.5)
-        return tf.reduce_sum(l1_loss, axis=-1)
+        return l1_loss * self.scale
