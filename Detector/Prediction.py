@@ -4,12 +4,14 @@ import cv2
 import numpy as np
 from models import Backbones, Head
 from Utils.anchor_utils import AnchorUtils
+import AnchorPresets
 
 keras.backend.set_learning_phase(0)
 
 input_size = 256
 NUM_CLASSES = 2
 anchors_per_layer = 3
+cluster_configs = AnchorPresets.default_config
 anchor_utils = AnchorUtils((input_size, input_size, 3), NUM_CLASSES, cluster_configs)
 backbone, s1, s2, s3, s4, s5, s6 = Backbones.v4_tiny(input_shape=(input_size, input_size, 3))
 model = Head.SubNet(backbone, s4, s6, NUM_CLASSES, anchors_per_layer)

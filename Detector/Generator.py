@@ -138,6 +138,7 @@ class AnchorGenerator(keras.utils.Sequence):
 
 
 if __name__ == '__main__':
+    import AnchorPresets
     augments = [iaa.SomeOf((0, 3),
                            [
                                iaa.Identity(),
@@ -158,7 +159,7 @@ if __name__ == '__main__':
                                                           mode=imgaug.ALL)),
                             iaa.Sometimes(0.5, iaa.PerspectiveTransform(scale=(0.05, 0.05), mode=imgaug.ALL))])
                 ]
-
+    c = AnchorPresets.default_config
     anchor = AnchorComputer((320, 320, 3), 20, c)
     gen = AnchorGenerator(batch_size=16, input_shape=(256, 256), num_classes=20, anchor_util=anchor,
                           data_path='E:/FSNet2/Datasets/voc_train.txt', augs=augments)
